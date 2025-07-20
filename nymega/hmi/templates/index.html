@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electricity Grid HMI with PLC Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom font and theme styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            background: radial-gradient(ellipse at bottom, #1b2735 0%, #090a0f 100%);
+        }
+
+        /* --- Symbol and Line Styling --- */
+        .producer-symbol {
+            stroke-width: 4px;
+            transition: filter 0.4s ease;
+            pointer-events: none;
+        }
+        .producer-on {
+            fill: #22c55e; /* Green 500 */
+            stroke: #16a34a; /* Green 600 */
+        }
+        .producer-off {
+            fill: #ef4444; /* Red 500 */
+            stroke: #dc2626; /* Red 600 */
+            fill-opacity: 0.8;
+        }
+
+        /* FIX: Position the producer wrapper with CSS transforms and handle hover state */
+        .producer-wrapper {
+            transform: translate(var(--x, 0px), var(--y, 0px));
+            transition: transform 0.4s ease;
+            cursor: pointer;
+        }
+        .producer-wrapper.is-on:hover {
+            transform: translate(var(--x, 0px), var(--y, 0px)) scale(1.1);
+        }
+        .producer-wrapper.is-on:hover .producer-symbol {
+            filter: drop-shadow(0 0 15px #22c55e);
+        }
+
+        .consumer-symbol {
+            stroke-width: 2px;
+            transition: filter 0.4s ease; /* Transition for the filter effect */
+            pointer-events: none; 
+        }
+        .consumer-on {
+            fill: #60A5FA; /* Blue 400 */
+            stroke: #3B82F6; /* Blue 500 */
+        }
+        .consumer-off {
+            fill: #4b5563; /* Gray 600 */
+            stroke: #374151; /* Gray 700 */
+        }
+
+        .consumer-wrapper {
+            transform: translate(var(--x, 0px), var(--y, 0px));
+            transition: transform 0.4s ease;
+        }
+        .consumer-wrapper.is-on:hover {
+            transform: translate(var(--x, 0px), var(--y, 0px)) scale(1.2);
+        }
+        .consumer-wrapper.is-on:hover .consumer-symbol {
+            filter: drop-shadow(0 0 10px rgba(96, 165, 250, 0.7));
+        }
+
+        .connection-line {
+            stroke-opacity: 0.6;
+            stroke-width: 1.5px;
+            transition: all 0.4s ease;
+        }
+        .line-off {
+            stroke-opacity: 0.1;
+            stroke-dasharray: 4;
+        }
+        
+        /* --- Tooltip --- */
+        .tooltip {
+            position: absolute;
+            background-color: rgba(17, 24, 39, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            transform: translate(-50%, -120%);
+            white-space: nowrap;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border: 1px solid #374151;
+        }
+
+        /* --- Animation --- */
+        .flow-dot {
+            fill: white;
+            r: 2;
+            animation: moveAlongPath 4s linear infinite;
+        }
+        @keyframes moveAlongPath {
+            from { motion-offset: 0%; }
+            to { motion-offset: 100%; }
+        }
+        
+        /* --- PLC Control Panel --- */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 28px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ef4444; /* Red 500 */
+            transition: .4s;
+            border-radius: 28px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #22c55e; /* Green 500 */
+        }
+        input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+        
+        /* --- Background Pattern --- */
+        #visualization-container {
+            background-color: #0f172a; /* Slate 900 */
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-900 text-gray-200 flex flex-col items-center justify-center min-h-screen p-4 overflow-hidden">
+
+    <div class="w-full max-w-7xl text-center mb-4">
+        <h1 class="text-4xl font-bold text-white" style="font-family: 'Orbitron', sans-serif;">HMI - Power Grid Monitor</h1>
+        <p class="text-lg text-gray-400 mt-2">Visualizing the connection between 5 producers and 200 consumers.</p>
+    </div>
+
+    <div id="visualization-container" class="w-full h-[65vh] bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 overflow-hidden relative">
+        <svg id="grid-svg" width="100%" height="100%"></svg>
+        <div id="tooltip" class="tooltip"></div>
+    </div>
+    
+    <div id="control-panel" class="w-full max-w-4xl mt-6 p-4 bg-gray-800/50 rounded-xl border border-gray-700">
+        <h2 class="text-center text-xl font-bold mb-4 text-white" style="font-family: 'Orbitron', sans-serif;">PLC Control Panel</h2>
+        <div id="toggles-container" class="flex justify-center items-center space-x-6">
+            <!-- Toggles will be inserted here by JS -->
+        </div>
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const svg = document.getElementById('grid-svg');
+            const tooltip = document.getElementById('tooltip');
+            const container = document.getElementById('visualization-container');
+            const togglesContainer = document.getElementById('toggles-container');
+
+            // --- Configuration & State ---
+            const NUM_PRODUCERS = 5;
+            const CONSUMERS_PER_PRODUCER = 40;
+            const PRODUCER_COLORS = ['#F59E0B', '#10B981', '#EF4444', '#8B5CF6', '#3B82F6'];
+            
+            let plcStatuses = Array.from({ length: NUM_PRODUCERS }, (_, i) => ({ id: `P${i}`, isOn: true }));
+
+            // --- SVG Symbols ---
+            const producerSymbolPath = "M12 2L1 21h22L12 2zm-1 14v-4h2v4h-2zm0 4v-2h2v2h-2z";
+            const consumerSymbolPath = "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8h5z";
+
+            let producers = [];
+            let consumers = [];
+            let lines = [];
+
+            // FIX: Generic function to create a symbol path centered at origin (0,0)
+            function createSymbolPath(id, symbolPath, size) {
+                const symbol = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                symbol.setAttribute('d', symbolPath);
+                // Center the 24x24 path data at origin, then scale it.
+                symbol.setAttribute('transform', `scale(${size/24}) translate(-12, -12)`);
+                symbol.dataset.id = id;
+                symbol.id = `symbol-${id}`;
+                return symbol;
+            }
+            
+            function showTooltip(e, text) {
+                tooltip.innerHTML = text;
+                tooltip.style.opacity = '1';
+                const containerRect = container.getBoundingClientRect();
+                tooltip.style.left = `${e.clientX - containerRect.left}px`;
+                tooltip.style.top = `${e.clientY - containerRect.top}px`;
+            }
+
+            function hideTooltip() { tooltip.style.opacity = '0'; }
+
+            function highlightNetwork(producerId, turnOn) {
+                const producerState = plcStatuses.find(p => p.id === producerId);
+                if (!producerState || !producerState.isOn) return;
+
+                lines.forEach(line => {
+                    const lineProducerState = plcStatuses.find(p => p.id === line.dataset.producer);
+                    if (!lineProducerState || !lineProducerState.isOn) return;
+
+                    if (line.dataset.producer === producerId) {
+                        line.style.strokeOpacity = turnOn ? '1' : '0.6';
+                        line.style.strokeWidth = turnOn ? '3px' : '1.5px';
+                        const dot = document.getElementById(`dot-for-${line.id}`);
+                        if (dot) dot.style.display = turnOn ? 'block' : 'none';
+                    } else {
+                         line.style.strokeOpacity = turnOn ? '0.1' : '0.6';
+                    }
+                });
+            }
+            
+            function updateGridState() {
+                plcStatuses.forEach(pState => {
+                    // FIX: Select the wrapper to toggle the 'is-on' class
+                    const producerWrapper = document.getElementById(`wrapper-${pState.id}`);
+                    if (producerWrapper) {
+                        producerWrapper.classList.toggle('is-on', pState.isOn);
+                        const symbol = producerWrapper.querySelector('.producer-symbol');
+                        if (symbol) {
+                            symbol.classList.remove('producer-on', 'producer-off');
+                            symbol.classList.add(pState.isOn ? 'producer-on' : 'producer-off');
+                        }
+                    }
+
+                    const consumerElements = document.querySelectorAll(`[data-producer='${pState.id}']`);
+                    consumerElements.forEach(el => {
+                        if (el.tagName.toLowerCase() === 'path') { // It's a line
+                            el.classList.toggle('line-off', !pState.isOn);
+                        } else { // It's a consumer symbol group
+                            el.classList.toggle('is-on', pState.isOn);
+                            const symbol = el.querySelector('.consumer-symbol');
+                            if(symbol) {
+                                symbol.classList.remove('consumer-on', 'consumer-off');
+                                symbol.classList.add(pState.isOn ? 'consumer-on' : 'consumer-off');
+                            }
+                        }
+                    });
+                });
+            }
+
+            function createControls() {
+                togglesContainer.innerHTML = '';
+                plcStatuses.forEach(pState => {
+                    const controlDiv = document.createElement('div');
+                    controlDiv.className = 'flex flex-col items-center space-y-2';
+                    const label = document.createElement('span');
+                    label.className = 'font-semibold text-gray-300';
+                    label.textContent = pState.id;
+                    const switchLabel = document.createElement('label');
+                    switchLabel.className = 'toggle-switch';
+                    const input = document.createElement('input');
+                    input.type = 'checkbox';
+                    input.checked = pState.isOn;
+                    input.addEventListener('change', (e) => {
+                        pState.isOn = e.target.checked;
+                        updateGridState();
+                    });
+                    const slider = document.createElement('span');
+                    slider.className = 'slider';
+                    switchLabel.appendChild(input);
+                    switchLabel.appendChild(slider);
+                    controlDiv.appendChild(label);
+                    controlDiv.appendChild(switchLabel);
+                    togglesContainer.appendChild(controlDiv);
+                });
+            }
+
+            function draw() {
+                svg.innerHTML = '';
+                producers = []; consumers = []; lines = [];
+                
+                const { width, height } = svg.getBoundingClientRect();
+                if (width === 0 || height === 0) return;
+
+                const lineGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                const consumerGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                const producerGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                const dotGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                svg.appendChild(lineGroup);
+                svg.appendChild(consumerGroup);
+                svg.appendChild(producerGroup);
+                svg.appendChild(dotGroup);
+
+                // Create Producers
+                for (let i = 0; i < NUM_PRODUCERS; i++) {
+                    const pState = plcStatuses[i];
+                    const producer = {
+                        id: pState.id,
+                        x: width * 0.15,
+                        y: (height / (NUM_PRODUCERS + 1)) * (i + 1),
+                        color: PRODUCER_COLORS[i % PRODUCER_COLORS.length]
+                    };
+                    producers.push(producer);
+
+                    // FIX: Create a wrapper group for the producer symbol
+                    const producerWrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                    producerWrapper.id = `wrapper-${producer.id}`;
+                    producerWrapper.classList.add('producer-wrapper');
+                    producerWrapper.style.setProperty('--x', producer.x + 'px');
+                    producerWrapper.style.setProperty('--y', producer.y + 'px');
+
+                    const hitArea = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    hitArea.setAttribute('cx', '0');
+                    hitArea.setAttribute('cy', '0');
+                    hitArea.setAttribute('r', '25'); // Larger hit area for producer
+                    hitArea.setAttribute('fill', 'transparent');
+                    producerWrapper.appendChild(hitArea);
+
+                    const el = createSymbolPath(producer.id, producerSymbolPath, 40);
+                    el.classList.add('producer-symbol');
+                    producerWrapper.appendChild(el);
+                    
+                    producerGroup.appendChild(producerWrapper);
+
+                    producerWrapper.addEventListener('mouseover', (e) => {
+                        const state = plcStatuses.find(p => p.id === producer.id);
+                        showTooltip(e, `Producer ${producer.id} - Status: ${state.isOn ? 'ON' : 'OFF'}`);
+                        highlightNetwork(producer.id, true);
+                    });
+                    producerWrapper.addEventListener('mouseout', () => {
+                        hideTooltip();
+                        highlightNetwork(producer.id, false);
+                    });
+                }
+
+                // Create Consumers and Lines
+                producers.forEach((producer, pIndex) => {
+                    const consumersInRow = 10;
+                    const consumerGridWidth = width * 0.6;
+                    const consumerGridHeight = (height / NUM_PRODUCERS) * 0.8;
+                    const startX = width * 0.35;
+                    const startY = producer.y - consumerGridHeight / 2;
+
+                    for (let i = 0; i < CONSUMERS_PER_PRODUCER; i++) {
+                        const consumerId = `C${pIndex}-${i}`;
+                        const row = Math.floor(i / consumersInRow);
+                        const col = i % consumersInRow;
+                        const consumer = {
+                            id: consumerId,
+                            x: startX + (col / (consumersInRow - 1)) * consumerGridWidth,
+                            y: startY + (row / (Math.ceil(CONSUMERS_PER_PRODUCER / consumersInRow) -1)) * consumerGridHeight,
+                        };
+                        consumers.push(consumer);
+
+                        const pathData = `M ${producer.x} ${producer.y} Q ${(producer.x + consumer.x)/2} ${consumer.y} ${consumer.x} ${consumer.y}`;
+                        
+                        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        line.setAttribute('d', pathData);
+                        line.setAttribute('class', 'connection-line');
+                        line.setAttribute('stroke', producer.color);
+                        line.setAttribute('fill', 'none');
+                        line.dataset.producer = producer.id;
+                        line.id = `line-${producer.id}-${consumer.id}`;
+                        lines.push(line);
+                        lineGroup.appendChild(line);
+                        
+                        const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                        dot.setAttribute("class", "flow-dot");
+                        dot.id = `dot-for-${line.id}`;
+                        dot.style.display = 'none';
+                        const motion = document.createElementNS("http://www.w3.org/2000/svg", "animateMotion");
+                        motion.setAttribute("dur", `${Math.random() * 2 + 3}s`);
+                        motion.setAttribute("repeatCount", "indefinite");
+                        motion.setAttribute("path", pathData);
+                        dot.appendChild(motion);
+                        dotGroup.appendChild(dot);
+
+                        const consumerWrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                        consumerWrapper.dataset.producer = producer.id;
+                        consumerWrapper.classList.add('consumer-wrapper');
+                        consumerWrapper.style.cursor = 'pointer';
+                        consumerWrapper.style.setProperty('--x', consumer.x + 'px');
+                        consumerWrapper.style.setProperty('--y', consumer.y + 'px');
+                        
+                        const hitArea = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        hitArea.setAttribute('cx', '0');
+                        hitArea.setAttribute('cy', '0');
+                        hitArea.setAttribute('r', '15');
+                        hitArea.setAttribute('fill', 'transparent');
+                        consumerWrapper.appendChild(hitArea);
+
+                        const consumerEl = createSymbolPath(consumer.id, consumerSymbolPath, 20);
+                        consumerEl.classList.add('consumer-symbol');
+                        consumerWrapper.appendChild(consumerEl);
+                        
+                        consumerGroup.appendChild(consumerWrapper);
+                        
+                        consumerWrapper.addEventListener('mouseover', (e) => {
+                            const pState = plcStatuses.find(p => p.id === producer.id);
+                            showTooltip(e, `Consumer ${consumer.id} (from ${producer.id}) - Power: ${pState.isOn ? 'ON' : 'OFF'}`);
+                            highlightNetwork(producer.id, true);
+                        });
+                        consumerWrapper.addEventListener('mouseout', () => {
+                            hideTooltip();
+                            highlightNetwork(producer.id, false);
+                        });
+                    }
+                });
+                
+                updateGridState();
+            }
+
+            // --- Initial Setup ---
+            createControls();
+            draw();
+            window.addEventListener('resize', draw);
+        });
+    </script>
+
+</body>
+</html>
